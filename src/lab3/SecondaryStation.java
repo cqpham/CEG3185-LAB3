@@ -17,8 +17,11 @@ public class SecondaryStation {
 	public static String host = "127.0.0.1";
 	public static int port = 5555;
 	public static String clientID = null;
-	public static String responseLine;
 	public static String flag = "01111110";
+	public static String inputLine = null;
+	public static int NS = 0; // send sequence number
+	public static int NR = 0; // receive sequence number
+	public static String primAddr = "00000000";
 	
 	/*
 	 * Secondary station object constructor
@@ -45,7 +48,6 @@ public class SecondaryStation {
 			
 			if (clientSocket != null && outputStream != null && inputStream != null) {
 				initialization();
-				communicate();
 			}
 		} 
 		catch (UnknownHostException e) {
@@ -66,14 +68,14 @@ public class SecondaryStation {
 		System.out.println("Ready for initialization.");
 		
 		
-		responseLine = inputStream.readLine();
-		String SNRM = responseLine.substring(16, 24);
+		inputLine = inputStream.readLine();
+		String SNRM = inputLine.substring(16, 24);
 		
 		// Receive SNRM message from primary and send UA response
 		if (SNRM.equals("11001001")) {
 			System.out.println("Received SNRM from primary: "+SNRM);
 			
-			String UA = flag + "00000000" + "11000110";
+			String UA = flag + primAddr + "11000110";
 			outputStream.println(UA);
 			
 			System.out.println("Sent UA ("+UA+") message to primary.");
@@ -81,44 +83,108 @@ public class SecondaryStation {
 	}
 	
 	/*
-	 * Method to send and received data
+	 * Method to enable data exchange.
+	 * 
+	 * NOTE: Secondary station only responds to commands from the Primary (NRM).
 	 */
 	
-	public static void communicate() throws IOException {
+	public static void createResponse() throws IOException {
 		while (true) {
 			boolean finished = false;
-			int counter = 0;
-			
+			String responseLine = null;
+			String control = null;
+			String address = null;
 			
 			while (!finished) {
-				responseLine = inputStream.readLine();
+				while (responseLine == null) {
+					//System.out.println("response line null");
+					responseLine = inputStream.readLine();
+				}
 				
-				if(responseLine.substring(responseLine.length()-1).equals("-")) {
+				if (responseLine != null) {
+					control = responseLine.substring(16, 24);
+					address = responseLine.substring(8,16);
+					System.out.println("Received control message from primary: "+control);
+					System.out.println("Address in message from primary: "+address);
+				}
+				
+				// Interpret message from primary
+				if (control.substring(0,1).equals("0")) {
+					// I-Frame, i.e. I, *, *
+					String message = responseLine.substring(24, responseLine.length());
+					
+					message = decodeBinary(message);
+					
+					System.out.println("Received the following message from "+address+": "+message);
 					finished = true;
 				}
-				
-				String control = responseLine.substring(16, 24);
-				System.out.println("Received control message from primary: "+control);
-				
-				if(control.substring(0,5).equals("10001")) {
-					String message;
-					System.out.println("Enter message to send (max 64 bytes): ");
-					message = buffReader.readLine();
-					
-					// Convert message to bytes
-					message = toBytes(message);
-					
-					if (message ==  null) {
-						System.out.println("ERROR: Message exceeds 64 bytes. Terminating client.");
-						return;
+				else if (control.substring(0,2).equals("10")) {
+					// S-Frame, i.e. RR, *, P
+					//System.out.println("Entered s-frame treatment.");
+					if (control.substring(4,5) == "1") {
+						// Send acknowledgement
+						//System.out.println("Entered polling reaction.");
+						String frameToSend = flag + primAddr + "1000" + NR;
+						outputStream.println(frameToSend);
 					}
-					
-					System.out.println("Message to send: "+message);
-					
+					finished = true;
 				}
+				else if (control.substring(0,2).equals("11")) {
+					// U-Frame, i.e. UA/SNRM
+					finished = true;
+				}
+			}
+			
+			System.out.println("Send message? [y/n]");
+			String answer;
+			answer = buffReader.readLine();
+			
+			if (answer.toLowerCase().equals("y")) {
+				sendIFrame();
+			}
+			else {
+				// continue
 			}
 		}
 	}
+	
+	/*
+	 * Method to send an IFrame to the primary
+	 */
+	
+	public static void sendIFrame() throws IOException {
+		String message = null;
+		String address = null;
+		boolean valid = false;
+		
+		while (!valid) {
+			System.out.println("Enter address to send to: ");
+			address = buffReader.readLine();
+			
+			if (validateAddress(address)) {
+				valid = true;
+			}
+			else {
+				System.out.println("Please enter valid address.");
+			}
+		}
+		
+		
+		while(message == null) {
+			System.out.println("Enter message to send (max 64 bytes): ");
+			message = buffReader.readLine();
+			
+			// Convert message to bytes
+			message = toBytes(message);
+		}
+		
+		System.out.println("Message to send: "+message);
+		String frameToSend = flag + address + "0" + threeBitBinary(NS) + "0" + threeBitBinary(NR) + message;
+		System.out.println("Frame to send: "+frameToSend);
+		
+		outputStream.println(frameToSend);
+	}
+	
 	
 	/*
 	 * Method to convert string of characters into bytes (cannot exceed 64 bytes)
@@ -126,9 +192,9 @@ public class SecondaryStation {
 	
 	public static String toBytes(String message) {
 		byte[] msgBytes = message.getBytes();
-		System.out.println("msgByte array length: "+msgBytes.length);
 		
 		if (msgBytes.length > 64) {
+			System.out.println("Message exceeds 64 bytes! Try again.");
 			return null;
 		}
 		
@@ -141,18 +207,84 @@ public class SecondaryStation {
 				msgBinary.append((value & 128) == 0 ? 0 : 1);
 		        value <<= 1;
 			}
-			msgBinary.append(" ");
 		}
 		
 		return msgBinary.toString();
 	}
 	
-	/***********************************************************************************
-	 * Main method
+	/*
+	 * Method to validate correct binary address
 	 */
 	
-	public static void main(String[] args) {
-		new SecondaryStation();
+	public static boolean validateAddress(String address) {
+		if (address.length() != 8) {
+			System.out.println("Must enter address of 8-bit length.");
+			return false;
+		}
+		
+		for (int i=0; i<address.length(); i++) {
+			if (address.charAt(i) != '0' && address.charAt(i) != '1') {
+				System.out.println("Found invalid character in bit string.");
+			}
+		}
+		
+		return true;
+	}
+	
+	/*
+	 * Method to convert decimal number to binary
+	 */
+	
+	public static String threeBitBinary(int number) {
+		String binaryString = Integer.toBinaryString(number);
+
+		if (binaryString.length() == 1) {
+			binaryString = "00" + binaryString;
+		}
+		else if (binaryString.length() == 2) {
+			binaryString = "0" + binaryString;
+		}
+		
+		return binaryString;
+	}
+	
+	/*
+	 * Method to convert binary message to readable String
+	 */
+	
+	public static String decodeBinary(String bin) {
+
+		char[] result = bin.toCharArray();
+		
+		String conversionString = "";
+		String resultString = "";
+		int binChar = 0;
+		char asciiChar = '0';
+		
+		for(int i = 0; i<result.length; i++)
+		{
+			conversionString = conversionString+result[i];
+			if(i!= 0 && (i+1)%8 == 0)
+			{
+				binChar = Integer.parseInt(conversionString,2);
+				asciiChar = (char)binChar;
+				resultString = resultString+asciiChar;
+				conversionString = "";
+			}
+		}
+		
+		return resultString;
+	}
+	
+	/***********************************************************************************
+	 * Main method
+	 * @throws IOException 
+	 */
+	
+	public static void main(String[] args) throws IOException {
+		SecondaryStation secondary = new SecondaryStation();
+		
+		secondary.createResponse();
 	}
 
 }

@@ -63,16 +63,12 @@ public class PS_answer {
         int s_count = 0;
         int i = 0;       
         
-        //Ask for line quality
-		BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
-        System.out.println("Percentage of frames to be accepted? (between 0-100):");
-        int successRate = Integer.parseInt(in.readLine());
-        
         //
         // create server socket
         //
         try {
             serverSocket = new ServerSocket(nPort);
+            System.out.println("Primary connect on port "+nPort);
             
         } catch (IOException e) {
             System.err.println("Could not listen on port: " + args[0]);
@@ -189,11 +185,7 @@ public class PS_answer {
 					finMsg = true;
 				}
 
-				double math = (Math.floor(Math.random()*100)+1);
-				if((Math.floor(Math.random()*100)+1)<successRate)
-				{
-					msgFail = false;
-				} // end successrate check if
+
 				else
 				{
 					msgFail = true;
